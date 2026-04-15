@@ -2,6 +2,7 @@ import tarfile
 import re
 import glob
 import math
+import os
 import smtplib
 from collections import Counter
 from email.header import Header
@@ -134,6 +135,52 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
 
 def extract_markdown_from_pdf(file_path:str) -> str:
     return pymupdf4llm.to_markdown(file_path,use_ocr=False,header=False,footer=False,ignore_code=True)
+
+def normalize_arxiv_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r'(\d{4}\.\d{4,5})(?:v\d+)?', value)
+    if match:
+        return match.group(1)
+
+    match = re.search(r'arXiv\.([^/\s]+)', value, flags=re.IGNORECASE)
+    if match:
+        return re.sub(r'v\d+$', '', match.group(1))
+
+    return value
+
+def build_collection_path_maps(collections: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+    collections_by_key = {collection['key']: collection for collection in collections}
+    key_to_path: dict[str, str] = {}
+
+    def _get_collection_path(collection_key: str) -> str:
+        if collection_key in key_to_path:
+            return key_to_path[collection_key]
+
+        collection = collections_by_key[collection_key]
+        parent_key = collection['data']['parentCollection']
+        if parent_key:
+            path = _get_collection_path(parent_key) + '/' + collection['data']['name']
+        else:
+            path = collection['data']['name']
+        key_to_path[collection_key] = path
+        return path
+
+    for collection_key in collections_by_key:
+        _get_collection_path(collection_key)
+
+    path_to_key = {path: key for key, path in key_to_path.items()}
+    return key_to_path, path_to_key
+
+def ensure_directory(path: str) -> str:
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def note_to_html(note_text: str) -> str:
+    lines = [line.strip() for line in note_text.splitlines() if line.strip()]
+    if not lines:
+        return "<p></p>"
+    return ''.join(f"<p>{line}</p>" for line in lines)
 
 def glob_match(path:str, pattern:str) -> bool:
     re_pattern = glob.translate(pattern,recursive=True)

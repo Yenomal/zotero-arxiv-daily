@@ -15,7 +15,11 @@ class Paper:
     authors: list[str]
     abstract: str
     url: str
+    source_id: Optional[str] = None
+    doi: Optional[str] = None
+    published_at: Optional[datetime] = None
     pdf_url: Optional[str] = None
+    local_pdf_path: Optional[str] = None
     full_text: Optional[str] = None
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None

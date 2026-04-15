@@ -281,3 +281,56 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+def test_run_outputs_to_zotero_and_pdf_writer(config, monkeypatch):
+    from omegaconf import open_dict
+
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_zotero_client
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.output.mode = "zotero"
+        config.output.pdf.enabled = True
+        config.output.zotero.collection_path = "survey"
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    monkeypatch.setattr(
+        registered_retrievers["arxiv"],
+        "retrieve_papers",
+        lambda self: [make_sample_paper(title="Output Paper")],
+    )
+
+    deliveries = []
+    saved_batches = []
+
+    class FakeSink:
+        def deliver(self, papers):
+            deliveries.append([paper.title for paper in papers])
+
+    class FakeWriter:
+        def __init__(self, cfg):
+            pass
+
+        def write_all(self, papers):
+            saved_batches.append([paper.title for paper in papers])
+
+    monkeypatch.setattr("zotero_arxiv_daily.executor.get_sinks", lambda cfg: [FakeSink()])
+    monkeypatch.setattr("zotero_arxiv_daily.executor.PdfWriter", FakeWriter)
+
+    executor = Executor(config)
+    executor.run()
+
+    assert deliveries == [["Output Paper"]]
+    assert saved_batches == [["Output Paper"]]

@@ -98,7 +98,7 @@ _DEFAULT_ITEMS = [
 ]
 
 
-def make_stub_zotero_client(collections=None, items=None):
+def make_stub_zotero_client(collections=None, items=None, collection_items_map=None):
     """Return a SimpleNamespace that quacks like pyzotero.zotero.Zotero.
 
     Supports the call patterns used by Executor.fetch_zotero_corpus():
@@ -107,6 +107,8 @@ def make_stub_zotero_client(collections=None, items=None):
     """
     cols = collections if collections is not None else _DEFAULT_COLLECTIONS
     itms = items if items is not None else _DEFAULT_ITEMS
+    collection_items = collection_items_map if collection_items_map is not None else {}
+    created_payloads: list[dict] = []
 
     def everything(generator):
         return generator
@@ -117,11 +119,30 @@ def make_stub_zotero_client(collections=None, items=None):
     def items_fn(**kwargs):
         return itms
 
-    return SimpleNamespace(
+    def collection_items_fn(collection, **kwargs):
+        return collection_items.get(collection, [])
+
+    def create_items_fn(payload, parentid=None, last_modified=None):
+        result = {"successful": {}}
+        for index, item in enumerate(payload):
+            key = f"NEW{len(created_payloads) + 1}"
+            created_payload = dict(item)
+            if parentid is not None:
+                created_payload["parentItem"] = parentid
+            created_payload["key"] = key
+            created_payloads.append(created_payload)
+            result["successful"][str(index)] = key
+        return result
+
+    stub = SimpleNamespace(
         everything=everything,
         collections=collections_fn,
         items=items_fn,
+        collection_items=collection_items_fn,
+        create_items=create_items_fn,
     )
+    stub.created_payloads = created_payloads
+    return stub
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +192,11 @@ def make_sample_paper(**overrides) -> Paper:
         authors=["Author A", "Author B", "Author C"],
         abstract="This paper explores a novel approach to widget engineering.",
         url="https://arxiv.org/abs/2026.00001",
+        source_id="2026.00001",
+        doi="10.48550/arXiv.2026.00001",
+        published_at=datetime(2026, 1, 1),
         pdf_url="https://arxiv.org/pdf/2026.00001",
+        local_pdf_path=None,
         full_text="\\begin{document} Some text. \\end{document}",
         tldr=None,
         affiliations=None,

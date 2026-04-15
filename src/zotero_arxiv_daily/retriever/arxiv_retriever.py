@@ -2,7 +2,7 @@ from .base import BaseRetriever, register_retriever
 import arxiv
 from arxiv import Result as ArxivResult
 from ..protocol import Paper
-from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar
+from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar, normalize_arxiv_id
 from tempfile import TemporaryDirectory
 import feedparser
 from tqdm import tqdm
@@ -30,14 +30,16 @@ def _download_file(url: str, path: str) -> None:
 
 
 def _run_in_subprocess(
-    result_queue: Any,
+    result_conn: Any,
     func: Callable[..., T | None],
     args: tuple[Any, ...],
 ) -> None:
     try:
-        result_queue.put(("ok", func(*args)))
+        result_conn.send(("ok", func(*args)))
     except Exception as exc:
-        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        result_conn.send(("error", f"{type(exc).__name__}: {exc}"))
+    finally:
+        result_conn.close()
 
 
 def _run_with_hard_timeout(
@@ -50,24 +52,25 @@ def _run_with_hard_timeout(
 ) -> T | None:
     start_methods = multiprocessing.get_all_start_methods()
     context = multiprocessing.get_context("fork" if "fork" in start_methods else start_methods[0])
-    result_queue = context.Queue()
-    process = context.Process(target=_run_in_subprocess, args=(result_queue, func, args))
+    recv_conn, send_conn = context.Pipe(duplex=False)
+    process = context.Process(target=_run_in_subprocess, args=(send_conn, func, args))
     process.start()
+    send_conn.close()
 
     try:
-        status, payload = result_queue.get(timeout=timeout)
+        if not recv_conn.poll(timeout):
+            raise Empty
+        status, payload = recv_conn.recv()
     except Empty:
         if process.is_alive():
             process.kill()
         process.join(5)
-        result_queue.close()
-        result_queue.join_thread()
+        recv_conn.close()
         logger.warning(f"{operation} timed out for {paper_title} after {timeout} seconds")
         return None
 
     process.join(5)
-    result_queue.close()
-    result_queue.join_thread()
+    recv_conn.close()
 
     if status == "ok":
         return payload
@@ -146,6 +149,9 @@ class ArxivRetriever(BaseRetriever):
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
         pdf_url = raw_paper.pdf_url
+        source_id = normalize_arxiv_id(raw_paper.entry_id)
+        doi = getattr(raw_paper, "doi", None) or (f"10.48550/arXiv.{source_id}" if source_id else None)
+        published_at = getattr(raw_paper, "published", None)
         full_text = extract_text_from_tar(raw_paper)
         if full_text is None:
             full_text = extract_text_from_html(raw_paper)
@@ -157,6 +163,9 @@ class ArxivRetriever(BaseRetriever):
             authors=authors,
             abstract=abstract,
             url=raw_paper.entry_id,
+            source_id=source_id,
+            doi=doi,
+            published_at=published_at,
             pdf_url=pdf_url,
             full_text=full_text,
         )

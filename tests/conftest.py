@@ -44,6 +44,11 @@ def _base_config():
                 "executor.reranker=api",
                 "executor.debug=false",
                 "executor.send_empty=false",
+                "output.mode=email",
+                "output.zotero.collection_path='泛读'",
+                "output.zotero.write_note=true",
+                "output.pdf.enabled=false",
+                "output.pdf.dir=/tmp/zotero-pdf-tests",
             ],
         )
     return cfg
