@@ -15,13 +15,8 @@ import requests
 
 T = TypeVar("T")
 
-DOWNLOAD_TIMEOUT = (10, 60)
-PDF_EXTRACT_TIMEOUT = 180
-TAR_EXTRACT_TIMEOUT = 180
-
-
-def _download_file(url: str, path: str) -> None:
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
+def _download_file(url: str, path: str, timeout: tuple[float, float]) -> None:
+    with requests.get(url, stream=True, timeout=timeout) as response:
         response.raise_for_status()
         with open(path, "wb") as file:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -79,29 +74,33 @@ def _run_with_hard_timeout(
     return None
 
 
-def _extract_text_from_pdf_worker(pdf_url: str) -> str:
+def _extract_text_from_pdf_worker(pdf_url: str, timeout: tuple[float, float]) -> str:
     with TemporaryDirectory() as temp_dir:
         path = os.path.join(temp_dir, "paper.pdf")
-        _download_file(pdf_url, path)
+        _download_file(pdf_url, path, timeout)
         return extract_markdown_from_pdf(path)
 
 
-def _extract_text_from_html_worker(html_url: str) -> str | None:
+def _extract_text_from_html_worker(html_url: str, timeout: tuple[float, float]) -> str | None:
     import trafilatura
 
-    downloaded = trafilatura.fetch_url(html_url)
-    if downloaded is None:
-        raise ValueError(f"Failed to download HTML from {html_url}")
-    text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+    response = requests.get(html_url, timeout=timeout)
+    response.raise_for_status()
+    text = trafilatura.extract(response.text, include_comments=False, include_tables=False)
     if not text:
         raise ValueError(f"No text extracted from {html_url}")
     return text
 
 
-def _extract_text_from_tar_worker(source_url: str, paper_id: str, paper_title: str | None = None) -> str | None:
+def _extract_text_from_tar_worker(
+    source_url: str,
+    paper_id: str,
+    timeout: tuple[float, float],
+    paper_title: str | None = None,
+) -> str | None:
     with TemporaryDirectory() as temp_dir:
         path = os.path.join(temp_dir, "paper.tar.gz")
-        _download_file(source_url, path)
+        _download_file(source_url, path, timeout)
         file_contents = extract_tex_code_from_tar(path, paper_id, paper_title=paper_title)
         if not file_contents or "all" not in file_contents:
             raise ValueError("Main tex file not found.")
@@ -152,11 +151,6 @@ class ArxivRetriever(BaseRetriever):
         source_id = normalize_arxiv_id(raw_paper.entry_id)
         doi = getattr(raw_paper, "doi", None) or (f"10.48550/arXiv.{source_id}" if source_id else None)
         published_at = getattr(raw_paper, "published", None)
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
         return Paper(
             source=self.name,
             title=title,
@@ -167,41 +161,79 @@ class ArxivRetriever(BaseRetriever):
             doi=doi,
             published_at=published_at,
             pdf_url=pdf_url,
-            full_text=full_text,
+            full_text=None,
         )
 
+    def hydrate_paper(self, paper: Paper) -> Paper:
+        if not self.retriever_config.full_text.enabled:
+            return paper
+        if paper.full_text is not None:
+            return paper
 
-def extract_text_from_html(paper: ArxivResult) -> str | None:
-    html_url = paper.entry_id.replace("/abs/", "/html/")
+        full_text = extract_text_from_html(paper, self.retriever_config.full_text)
+        if full_text is not None:
+            paper.full_text = full_text
+            paper.full_text_source = "html"
+            return paper
+
+        full_text = extract_text_from_pdf(paper, self.retriever_config.full_text)
+        if full_text is not None:
+            paper.full_text = full_text
+            paper.full_text_source = "pdf"
+            return paper
+
+        full_text = extract_text_from_tar(paper, self.retriever_config.full_text)
+        if full_text is not None:
+            paper.full_text = full_text
+            paper.full_text_source = "tar"
+        return paper
+
+
+def _request_timeout(full_text_config) -> tuple[float, float]:
+    return (
+        float(full_text_config.connect_timeout_sec),
+        float(full_text_config.read_timeout_sec),
+    )
+
+
+def extract_text_from_html(paper: Paper, full_text_config) -> str | None:
+    html_url = paper.url.replace("http://", "https://").replace("/abs/", "/html/")
     try:
-        return _extract_text_from_html_worker(html_url)
+        return _run_with_hard_timeout(
+            _extract_text_from_html_worker,
+            (html_url, _request_timeout(full_text_config)),
+            timeout=float(full_text_config.html_timeout_sec),
+            operation="HTML extraction",
+            paper_title=paper.title,
+        )
     except Exception as exc:
         logger.warning(f"HTML extraction failed for {paper.title}: {exc}")
         return None
 
 
-def extract_text_from_pdf(paper: ArxivResult) -> str | None:
+def extract_text_from_pdf(paper: Paper, full_text_config) -> str | None:
     if paper.pdf_url is None:
         logger.warning(f"No PDF URL available for {paper.title}")
         return None
     return _run_with_hard_timeout(
         _extract_text_from_pdf_worker,
-        (paper.pdf_url,),
-        timeout=PDF_EXTRACT_TIMEOUT,
+        (paper.pdf_url, _request_timeout(full_text_config)),
+        timeout=float(full_text_config.pdf_timeout_sec),
         operation="PDF extraction",
         paper_title=paper.title,
     )
 
 
-def extract_text_from_tar(paper: ArxivResult) -> str | None:
-    source_url = paper.source_url()
-    if source_url is None:
+def extract_text_from_tar(paper: Paper, full_text_config) -> str | None:
+    source_id = normalize_arxiv_id(paper.source_id or paper.url)
+    if source_id is None:
         logger.warning(f"No source URL available for {paper.title}")
         return None
+    source_url = f"https://arxiv.org/e-print/{source_id}"
     return _run_with_hard_timeout(
         _extract_text_from_tar_worker,
-        (source_url, paper.entry_id, paper.title),
-        timeout=TAR_EXTRACT_TIMEOUT,
+        (source_url, paper.url, _request_timeout(full_text_config), paper.title),
+        timeout=float(full_text_config.tar_timeout_sec),
         operation="Tar extraction",
         paper_title=paper.title,
     )

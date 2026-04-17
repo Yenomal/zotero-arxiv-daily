@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "quality_score": {
+      "type": "number"
+    },
+    "novelty_score": {
+      "type": "number"
+    },
+    "empirical_score": {
+      "type": "number"
+    },
+    "clarity_score": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "quality_score",
+    "novelty_score",
+    "empirical_score",
+    "clarity_score"
+  ]
+}

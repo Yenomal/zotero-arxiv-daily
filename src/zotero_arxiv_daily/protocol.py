@@ -21,9 +21,22 @@ class Paper:
     pdf_url: Optional[str] = None
     local_pdf_path: Optional[str] = None
     full_text: Optional[str] = None
+    full_text_source: Optional[str] = None
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
+    original_score: Optional[float] = None
+    final_score: Optional[float] = None
+    quality_score: Optional[float] = None
+    novelty_score: Optional[float] = None
+    empirical_score: Optional[float] = None
+    clarity_score: Optional[float] = None
+    llm_summary: Optional[str] = None
+    reading_note_sections: Optional[dict[str, str]] = None
+    reading_note_markdown: Optional[str] = None
+    reading_note_html: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')

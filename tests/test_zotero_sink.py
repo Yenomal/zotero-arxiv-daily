@@ -12,11 +12,11 @@ def test_zotero_sink_creates_preprint_and_note(config, monkeypatch):
         }
     ]
     stub_zot = make_stub_zotero_client(collections=collections, collection_items_map={"OUT1": []})
-    monkeypatch.setattr("zotero_arxiv_daily.sink.zotero.zotero.Zotero", lambda *args, **kwargs: stub_zot)
+    monkeypatch.setattr("zotero_arxiv_daily.deduper.zotero.Zotero", lambda *args, **kwargs: stub_zot)
 
     with open_dict(config):
         config.output.mode = "zotero"
-        config.output.zotero.collection_path = "泛读"
+        config.output.zotero.collection_path_parts = ["泛读"]
         config.output.zotero.write_note = True
         config.output.pdf.dir = "/home/rui/zotero/pdf"
 
@@ -29,9 +29,10 @@ def test_zotero_sink_creates_preprint_and_note(config, monkeypatch):
         affiliations=["TsingHua University"],
         score=8.7,
     )
+    paper.reading_note_html = "<h1>阅读笔记</h1><p>内容</p>"
     sink.deliver([paper])
 
-    assert len(stub_zot.created_payloads) == 3
+    assert len(stub_zot.created_payloads) == 4
 
     item_payload = stub_zot.created_payloads[0]
     assert item_payload["itemType"] == "preprint"
@@ -42,10 +43,16 @@ def test_zotero_sink_creates_preprint_and_note(config, monkeypatch):
     note_payload = stub_zot.created_payloads[1]
     assert note_payload["itemType"] == "note"
     assert note_payload["parentItem"] == "NEW1"
+    assert "<h1>推荐论文</h1>" in note_payload["note"]
     assert "一行总结" in note_payload["note"]
     assert "/home/rui/zotero/pdf/2604.00626.pdf" in note_payload["note"]
 
-    attachment_payload = stub_zot.created_payloads[2]
+    reading_note_payload = stub_zot.created_payloads[2]
+    assert reading_note_payload["itemType"] == "note"
+    assert reading_note_payload["parentItem"] == "NEW1"
+    assert "<h1>阅读笔记</h1>" in reading_note_payload["note"]
+
+    attachment_payload = stub_zot.created_payloads[3]
     assert attachment_payload["itemType"] == "attachment"
     assert attachment_payload["parentItem"] == "NEW1"
     assert attachment_payload["linkMode"] == "linked_file"
@@ -72,11 +79,11 @@ def test_zotero_sink_skips_existing_paper(config, monkeypatch):
         ]
     }
     stub_zot = make_stub_zotero_client(collections=collections, collection_items_map=existing_items)
-    monkeypatch.setattr("zotero_arxiv_daily.sink.zotero.zotero.Zotero", lambda *args, **kwargs: stub_zot)
+    monkeypatch.setattr("zotero_arxiv_daily.deduper.zotero.Zotero", lambda *args, **kwargs: stub_zot)
 
     with open_dict(config):
         config.output.mode = "zotero"
-        config.output.zotero.collection_path = "泛读"
+        config.output.zotero.collection_path_parts = ["泛读"]
         config.output.zotero.write_note = True
 
     sink = ZoteroSink(config)

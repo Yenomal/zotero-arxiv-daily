@@ -13,6 +13,51 @@ from zotero_arxiv_daily.protocol import CorpusPaper, Paper
 _AFFILIATION_MARKER = "You are an assistant who perfectly extracts affiliations"
 _AFFILIATION_RESPONSE = '["TsingHua University","Peking University"]'
 _TLDR_RESPONSE = "Hello! How can I assist you today?"
+_SCORER_MARKER = "严格的学术论文评审助手"
+_SCORER_RESPONSE = """{
+  "quality_score": 8.0,
+  "novelty_score": 7.0,
+  "empirical_score": 9.0,
+  "clarity_score": 6.0
+}"""
+_READING_NOTE_RESPONSE = """# Sample Paper Title
+
+一句话总结
+
+## Background
+
+背景内容
+
+## Model
+
+模型内容
+
+### Training
+
+训练内容
+
+### Inference
+
+推理内容
+
+## Insight
+
+关键创新
+
+## Others
+
+其他细节
+
+## Thinking
+
+思考内容
+
+## Experiment
+
+1. 消融实验
+
+2. 其他实验
+"""
 
 
 def _make_chat_response(content: str) -> SimpleNamespace:
@@ -36,6 +81,10 @@ def _stub_chat_create(**kwargs):
     request_str = str(messages)
     if _AFFILIATION_MARKER in request_str:
         return _make_chat_response(_AFFILIATION_RESPONSE)
+    if _SCORER_MARKER in request_str:
+        return _make_chat_response(_SCORER_RESPONSE)
+    if "阅读笔记" in request_str and "论文标题" in request_str:
+        return _make_chat_response(_READING_NOTE_RESPONSE)
     return _make_chat_response(_TLDR_RESPONSE)
 
 

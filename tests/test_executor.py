@@ -191,6 +191,11 @@ def test_run_end_to_end(config, monkeypatch):
         "retrieve_papers",
         lambda self: retrieved,
     )
+    monkeypatch.setattr(
+        registered_retrievers["arxiv"],
+        "hydrate_paper",
+        lambda self, paper: paper,
+    )
 
     # 4. Stub SMTP
     sent = []
@@ -234,6 +239,7 @@ def test_run_no_papers_send_empty_false(config, monkeypatch):
     from zotero_arxiv_daily.retriever.base import registered_retrievers
 
     monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: [])
+    monkeypatch.setattr(registered_retrievers["arxiv"], "hydrate_paper", lambda self, paper: paper)
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
@@ -270,6 +276,7 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     from zotero_arxiv_daily.retriever.base import registered_retrievers
 
     monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: [])
+    monkeypatch.setattr(registered_retrievers["arxiv"], "hydrate_paper", lambda self, paper: paper)
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
@@ -293,7 +300,7 @@ def test_run_outputs_to_zotero_and_pdf_writer(config, monkeypatch):
         config.executor.reranker = "api"
         config.output.mode = "zotero"
         config.output.pdf.enabled = True
-        config.output.zotero.collection_path = "survey"
+        config.output.zotero.collection_path_parts = ["survey"]
 
     stub_zot = make_stub_zotero_client()
     monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
@@ -310,6 +317,11 @@ def test_run_outputs_to_zotero_and_pdf_writer(config, monkeypatch):
         registered_retrievers["arxiv"],
         "retrieve_papers",
         lambda self: [make_sample_paper(title="Output Paper")],
+    )
+    monkeypatch.setattr(
+        registered_retrievers["arxiv"],
+        "hydrate_paper",
+        lambda self, paper: paper,
     )
 
     deliveries = []
@@ -334,3 +346,176 @@ def test_run_outputs_to_zotero_and_pdf_writer(config, monkeypatch):
 
     assert deliveries == [["Output Paper"]]
     assert saved_batches == [["Output Paper"]]
+
+
+def test_run_hydrates_only_selected_top_papers(config, monkeypatch):
+    from omegaconf import open_dict
+
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_smtp, make_stub_zotero_client
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.max_paper_num = 1
+        config.output.mode = "email"
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    import smtplib
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    retrieved = [
+        make_sample_paper(title="Paper 1"),
+        make_sample_paper(title="Paper 2"),
+    ]
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: retrieved)
+
+    hydrated_titles = []
+
+    def _hydrate(self, paper):
+        hydrated_titles.append(paper.title)
+        paper.full_text = "hydrated text"
+        return paper
+
+    monkeypatch.setattr(registered_retrievers["arxiv"], "hydrate_paper", _hydrate)
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp([]))
+
+    executor = Executor(config)
+    executor.run()
+
+    assert hydrated_titles == ["Paper 1"]
+
+
+def test_run_uses_stage3_scorer_and_metrics_writer(config, monkeypatch):
+    from omegaconf import open_dict
+
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_zotero_client
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.max_paper_num = 2
+        config.scorer.enabled = True
+        config.scorer.final_top_k = 1
+        config.scorer.metrics.write_txt = True
+        config.output.mode = "zotero"
+        config.output.pdf.enabled = False
+        config.output.zotero.collection_path_parts = ["survey"]
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    retrieved = [
+        make_sample_paper(title="Paper 1", score=9.0),
+        make_sample_paper(title="Paper 2", score=7.0),
+    ]
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: retrieved)
+    monkeypatch.setattr(registered_retrievers["arxiv"], "hydrate_paper", lambda self, paper: paper)
+
+    deliveries = []
+    metric_writes = []
+
+    class FakeSink:
+        def deliver(self, papers):
+            deliveries.append([paper.title for paper in papers])
+
+    class FakeScorer:
+        def __init__(self, cfg, client):
+            self.metrics = type("Metrics", (), {"input_tokens": 10, "output_tokens": 5, "paper_count": 2})()
+
+        def score_and_rank(self, papers):
+            papers[0].final_score = 9.0
+            papers[0].score = 9.0
+            return papers[:1]
+
+    class FakeReadingNoteGenerator:
+        def __init__(self, cfg, client):
+            self.metrics = type("Metrics", (), {"input_tokens": 0, "output_tokens": 0, "paper_count": 0})()
+
+        def generate(self, paper):
+            return paper
+
+    class FakeMetricsWriter:
+        def __init__(self, output_dir):
+            self.output_dir = output_dir
+
+        def write(self, metrics):
+            metric_writes.append((metrics.input_tokens, metrics.output_tokens, metrics.paper_count))
+
+    monkeypatch.setattr("zotero_arxiv_daily.executor.get_sinks", lambda cfg: [FakeSink()])
+    monkeypatch.setattr("zotero_arxiv_daily.executor.PaperScorer", FakeScorer)
+    monkeypatch.setattr("zotero_arxiv_daily.executor.ReadingNoteGenerator", FakeReadingNoteGenerator)
+    monkeypatch.setattr("zotero_arxiv_daily.executor.MetricsWriter", FakeMetricsWriter)
+
+    executor = Executor(config)
+    executor.run()
+
+    assert deliveries == [["Paper 1"]]
+    assert metric_writes == [(10, 5, 2)]
+
+
+def test_run_filters_existing_papers_before_rerank(config, monkeypatch):
+    from omegaconf import open_dict
+
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_zotero_client
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.output.mode = "zotero"
+        config.output.pdf.enabled = False
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    duplicate = make_sample_paper(title="Duplicate Paper")
+    fresh = make_sample_paper(
+        title="Fresh Paper",
+        url="https://arxiv.org/abs/2026.99999",
+        source_id="2026.99999",
+        doi="10.48550/arXiv.2026.99999",
+    )
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: [duplicate, fresh])
+    monkeypatch.setattr(registered_retrievers["arxiv"], "hydrate_paper", lambda self, paper: paper)
+
+    deliveries = []
+
+    class FakeExistingIndex:
+        def filter_new_papers(self, papers):
+            return [papers[1]], [papers[0]]
+
+    class FakeSink:
+        def __init__(self):
+            self.existing_index = FakeExistingIndex()
+
+        def deliver(self, papers):
+            deliveries.append([paper.title for paper in papers])
+
+    monkeypatch.setattr("zotero_arxiv_daily.executor.get_sinks", lambda cfg: [FakeSink()])
+
+    executor = Executor(config)
+    executor.run()
+
+    assert deliveries == [["Fresh Paper"]]

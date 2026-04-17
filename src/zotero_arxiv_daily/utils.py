@@ -3,6 +3,7 @@ import re
 import glob
 import math
 import os
+from html import escape
 import smtplib
 from collections import Counter
 from email.header import Header
@@ -181,6 +182,61 @@ def note_to_html(note_text: str) -> str:
     if not lines:
         return "<p></p>"
     return ''.join(f"<p>{line}</p>" for line in lines)
+
+def markdown_to_html(markdown_text: str) -> str:
+    html_parts: list[str] = []
+    in_ul = False
+    in_ol = False
+
+    def _close_lists():
+        nonlocal in_ul, in_ol
+        if in_ul:
+            html_parts.append("</ul>")
+            in_ul = False
+        if in_ol:
+            html_parts.append("</ol>")
+            in_ol = False
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            _close_lists()
+            continue
+
+        if stripped.startswith("### "):
+            _close_lists()
+            html_parts.append(f"<h3>{escape(stripped[4:])}</h3>")
+            continue
+        if stripped.startswith("## "):
+            _close_lists()
+            html_parts.append(f"<h2>{escape(stripped[3:])}</h2>")
+            continue
+        if stripped.startswith("# "):
+            _close_lists()
+            html_parts.append(f"<h1>{escape(stripped[2:])}</h1>")
+            continue
+        if re.match(r"^\d+\.\s+", stripped):
+            if not in_ol:
+                _close_lists()
+                html_parts.append("<ol>")
+                in_ol = True
+            item_text = re.sub(r"^\d+\.\s+", "", stripped)
+            html_parts.append(f"<li>{escape(item_text)}</li>")
+            continue
+        if stripped.startswith("- "):
+            if not in_ul:
+                _close_lists()
+                html_parts.append("<ul>")
+                in_ul = True
+            html_parts.append(f"<li>{escape(stripped[2:])}</li>")
+            continue
+
+        _close_lists()
+        html_parts.append(f"<p>{escape(stripped)}</p>")
+
+    _close_lists()
+    return "".join(html_parts)
 
 def glob_match(path:str, pattern:str) -> bool:
     re_pattern = glob.translate(pattern,recursive=True)

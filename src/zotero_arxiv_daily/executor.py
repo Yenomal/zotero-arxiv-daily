@@ -11,6 +11,9 @@ from openai import OpenAI
 from tqdm import tqdm
 from .sink import get_sinks
 from .pdf_writer import PdfWriter
+from .scorer import PaperScorer
+from .metrics_writer import MetricsWriter
+from .reading_note_generator import ReadingNoteGenerator
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -40,7 +43,14 @@ class Executor:
         self.reranker = get_reranker_cls(config.executor.reranker)(config)
         self.openai_client = OpenAI(api_key=config.llm.api.key, base_url=config.llm.api.base_url)
         self.sinks = get_sinks(config)
+        self.existing_index = next(
+            (sink.existing_index for sink in self.sinks if hasattr(sink, "existing_index")),
+            None,
+        )
         self.pdf_writer = PdfWriter(config) if config.output.pdf.enabled else None
+        self.scorer = PaperScorer(config, self.openai_client) if config.scorer.enabled else None
+        self.reading_note_generator = ReadingNoteGenerator(config, self.openai_client) if config.scorer.enabled and config.scorer.note.enabled else None
+        self.metrics_writer = MetricsWriter(config.scorer.metrics.output_dir) if config.scorer.enabled and config.scorer.metrics.write_txt else None
     def fetch_zotero_corpus(self) -> list[CorpusPaper]:
         logger.info("Fetching zotero corpus")
         zot = zotero.Zotero(self.config.zotero.user_id, 'user', self.config.zotero.api_key)
@@ -102,12 +112,57 @@ class Executor:
                 continue
             logger.info(f"Retrieved {len(papers)} {source} papers")
             all_papers.extend(papers)
+
+        if self.existing_index is not None and all_papers:
+            all_papers, skipped_papers = self.existing_index.filter_new_papers(all_papers)
+            logger.info(
+                f"Filtered out {len(skipped_papers)} existing papers from output collection before reranking"
+            )
+            if skipped_papers:
+                sample_titles = ", ".join(paper.title for paper in skipped_papers[:5])
+                logger.debug(f"Skipped existing paper samples: {sample_titles}")
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
         reranked_papers = []
         if len(all_papers) > 0:
             logger.info("Reranking papers...")
             reranked_papers = self.reranker.rerank(all_papers, corpus)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
+            logger.info(f"First-stage ranking kept {len(reranked_papers)} papers")
+            logger.info("Fetching full text for selected papers...")
+            for paper in tqdm(reranked_papers):
+                retriever = self.retrievers.get(paper.source)
+                if retriever is not None:
+                    retriever.hydrate_paper(paper)
+                paper.original_score = paper.score
+
+            if self.scorer is not None:
+                logger.info("Scoring and reranking selected papers...")
+                reranked_papers = self.scorer.score_and_rank(reranked_papers)
+                logger.info(f"Second-stage ranking kept {len(reranked_papers)} papers")
+
+            if self.reading_note_generator is not None:
+                logger.info("Generating reading notes...")
+                for paper in tqdm(reranked_papers):
+                    self.reading_note_generator.generate(paper)
+
+            if self.metrics_writer is not None:
+                total_metrics = self.scorer.metrics
+                if self.reading_note_generator is not None:
+                    total_metrics.input_tokens += self.reading_note_generator.metrics.input_tokens
+                    total_metrics.output_tokens += self.reading_note_generator.metrics.output_tokens
+                    total_metrics.paper_count = max(
+                        total_metrics.paper_count,
+                        self.reading_note_generator.metrics.paper_count,
+                    )
+                metrics_path = self.metrics_writer.write(total_metrics)
+                logger.info(
+                    "Scorer token usage summary: input_tokens={}, output_tokens={}, paper_count={}, file={}",
+                    total_metrics.input_tokens,
+                    total_metrics.output_tokens,
+                    total_metrics.paper_count,
+                    metrics_path,
+                )
+
             logger.info("Generating TLDR and affiliations...")
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)

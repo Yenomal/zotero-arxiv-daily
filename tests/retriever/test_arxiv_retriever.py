@@ -51,16 +51,12 @@ def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
 
     monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
 
-    # Skip file downloads in convert_to_paper
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: None)
-
     retriever = ArxivRetriever(config)
     papers = retriever.retrieve_papers()
 
     assert len(papers) == len(new_entries)
     assert set(p.title for p in papers) == set(e.title for e in new_entries)
+    assert all(p.full_text is None for p in papers)
 
 
 def test_run_with_hard_timeout_returns_value():

@@ -3,13 +3,14 @@ from html import escape
 from pathlib import Path
 import re
 
+from hydra.utils import to_absolute_path
 from loguru import logger
 from omegaconf import DictConfig
-from pyzotero import zotero
 
 from .base import BaseSink
+from ..deduper import ExistingPaperIndex
 from ..protocol import Paper
-from ..utils import build_collection_path_maps, normalize_arxiv_id, note_to_html
+from ..utils import normalize_arxiv_id
 
 
 def _author_to_creator(name: str) -> dict[str, str]:
@@ -39,66 +40,15 @@ def _extract_created_key(response: dict | None) -> str | None:
     return None
 
 
-def _normalize_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    return url.rstrip("/")
-
-
 class ZoteroSink(BaseSink):
     def __init__(self, config: DictConfig):
         super().__init__(config)
-        self.zot = zotero.Zotero(config.zotero.user_id, "user", config.zotero.api_key)
-        self.collection_key = self._resolve_collection_key(config.output.zotero.collection_path)
-        self.existing_urls, self.existing_dois, self.existing_source_ids = self._load_existing_identifiers()
-
-    def _resolve_collection_key(self, collection_path: str) -> str:
-        collections = self.zot.everything(self.zot.collections())
-        _, path_to_key = build_collection_path_maps(collections)
-        if collection_path not in path_to_key:
-            raise ValueError(f"Output Zotero collection path not found: {collection_path}")
-        return path_to_key[collection_path]
-
-    def _load_existing_identifiers(self) -> tuple[set[str], set[str], set[str]]:
-        existing_urls: set[str] = set()
-        existing_dois: set[str] = set()
-        existing_source_ids: set[str] = set()
-
-        items = self.zot.everything(self.zot.collection_items(self.collection_key))
-        for item in items:
-            data = item.get("data", {})
-            url = _normalize_url(data.get("url"))
-            if url:
-                existing_urls.add(url)
-
-            doi = data.get("DOI")
-            if doi:
-                existing_dois.add(doi)
-
-            archive_id = normalize_arxiv_id(data.get("archiveID"))
-            if archive_id:
-                existing_source_ids.add(archive_id)
-
-            extra = data.get("extra", "")
-            match = re.search(r"arXiv:\s*([0-9.]+)", extra)
-            if match:
-                existing_source_ids.add(match.group(1))
-
-        return existing_urls, existing_dois, existing_source_ids
+        self.existing_index = ExistingPaperIndex.from_config(config)
+        self.zot = self.existing_index.zot
+        self.collection_key = self.existing_index.collection_key
 
     def _paper_exists(self, paper: Paper) -> bool:
-        paper_url = _normalize_url(paper.url)
-        if paper_url and paper_url in self.existing_urls:
-            return True
-
-        if paper.doi and paper.doi in self.existing_dois:
-            return True
-
-        source_id = normalize_arxiv_id(paper.source_id or paper.url)
-        if source_id and source_id in self.existing_source_ids:
-            return True
-
-        return False
+        return self.existing_index.contains(paper)
 
     def _build_extra(self, paper: Paper) -> str:
         lines = []
@@ -136,25 +86,57 @@ class ZoteroSink(BaseSink):
         return item
 
     def _build_note_text(self, paper: Paper) -> str:
-        template = self.config.output.zotero.note_template
+        template = self._load_note_template()
         affiliations = "、".join(paper.affiliations) if paper.affiliations else "未知"
         score = f"{paper.score:.1f}" if paper.score is not None else "未知"
+        original_score = f"{paper.original_score:.1f}" if paper.original_score is not None else "未知"
+        final_score = f"{paper.final_score:.1f}" if paper.final_score is not None else "未知"
+        quality_score = f"{paper.quality_score:.1f}" if paper.quality_score is not None else "未知"
+        novelty_score = f"{paper.novelty_score:.1f}" if paper.novelty_score is not None else "未知"
+        empirical_score = f"{paper.empirical_score:.1f}" if paper.empirical_score is not None else "未知"
+        clarity_score = f"{paper.clarity_score:.1f}" if paper.clarity_score is not None else "未知"
         return template.format(
-            score=score,
-            tldr=paper.tldr or paper.abstract or "未知",
-            affiliations=affiliations,
-            local_pdf_path=paper.local_pdf_path or "未保存",
-            generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            url=paper.url,
-            title=paper.title,
+            score=escape(score),
+            original_score=escape(original_score),
+            final_score=escape(final_score),
+            quality_score=escape(quality_score),
+            novelty_score=escape(novelty_score),
+            empirical_score=escape(empirical_score),
+            clarity_score=escape(clarity_score),
+            tldr=escape(paper.tldr or paper.abstract or "未知"),
+            affiliations=escape(affiliations),
+            local_pdf_path=escape(paper.local_pdf_path or "未保存"),
+            generated_at=escape(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            url=escape(paper.url),
+            title=escape(paper.title),
         )
+
+    def _load_note_template(self) -> str:
+        template_path = self.config.output.zotero.get("note_template_path")
+        if template_path:
+            resolved_path = Path(to_absolute_path(template_path))
+            try:
+                return resolved_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                logger.warning(f"Note template file not found, falling back to inline template: {resolved_path}")
+        return self.config.output.zotero.note_template
 
     def _create_note(self, parent_key: str, paper: Paper) -> None:
         note_text = self._build_note_text(paper)
         note_payload = {
             "itemType": "note",
             "parentItem": parent_key,
-            "note": note_to_html(escape(note_text)),
+            "note": note_text,
+        }
+        self.zot.create_items([note_payload])
+
+    def _create_reading_note(self, parent_key: str, paper: Paper) -> None:
+        if not paper.reading_note_html:
+            return
+        note_payload = {
+            "itemType": "note",
+            "parentItem": parent_key,
+            "note": paper.reading_note_html,
         }
         self.zot.create_items([note_payload])
 
@@ -181,16 +163,6 @@ class ZoteroSink(BaseSink):
         }
         self.zot.create_items([attachment_payload])
 
-    def _remember(self, paper: Paper) -> None:
-        paper_url = _normalize_url(paper.url)
-        if paper_url:
-            self.existing_urls.add(paper_url)
-        if paper.doi:
-            self.existing_dois.add(paper.doi)
-        source_id = normalize_arxiv_id(paper.source_id or paper.url)
-        if source_id:
-            self.existing_source_ids.add(source_id)
-
     def deliver(self, papers: list[Paper]) -> None:
         if not papers:
             logger.info("No papers to write to Zotero")
@@ -212,9 +184,10 @@ class ZoteroSink(BaseSink):
 
             if self.config.output.zotero.write_note:
                 self._create_note(item_key, paper)
+                self._create_reading_note(item_key, paper)
             self._create_linked_attachment(item_key, paper)
 
-            self._remember(paper)
+            self.existing_index.remember(paper)
             created += 1
 
         logger.info(f"Zotero write completed: created={created}, skipped={skipped}")
