@@ -26,9 +26,42 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          PDF_LOCAL_DIR: ${{ runner.temp }}/zotero-pdf
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           echo "Use custom config: "
           cat config/custom.yaml
           uv run src/zotero_arxiv_daily/main.py
+
+      - name: Setup SSH for PDF sync
+        if: ${{ vars.PDF_SSH_ENABLED == 'true' }}
+        env:
+          PDF_SSH_HOST: ${{ secrets.PDF_SSH_HOST }}
+          PDF_SSH_PORT: ${{ secrets.PDF_SSH_PORT }}
+          PDF_SSH_USER: ${{ secrets.PDF_SSH_USER }}
+          PDF_SSH_PRIVATE_KEY: ${{ secrets.PDF_SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf "%s\n" "$PDF_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${PDF_SSH_PORT}" "${PDF_SSH_HOST}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync PDFs to remote host
+        if: ${{ vars.PDF_SSH_ENABLED == 'true' }}
+        env:
+          PDF_LOCAL_DIR: ${{ runner.temp }}/zotero-pdf
+          PDF_SSH_HOST: ${{ secrets.PDF_SSH_HOST }}
+          PDF_SSH_PORT: ${{ secrets.PDF_SSH_PORT }}
+          PDF_SSH_USER: ${{ secrets.PDF_SSH_USER }}
+          PDF_SSH_REMOTE_DIR: ${{ vars.PDF_SSH_REMOTE_DIR }}
+        run: |
+          ssh -p "${PDF_SSH_PORT}" -i ~/.ssh/id_ed25519 "${PDF_SSH_USER}@${PDF_SSH_HOST}" "mkdir -p '${PDF_SSH_REMOTE_DIR}'"
+          shopt -s nullglob
+          files=("${PDF_LOCAL_DIR}"/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No PDF or metrics files to sync."
+            exit 0
+          fi
+          scp -P "${PDF_SSH_PORT}" -i ~/.ssh/id_ed25519 "${files[@]}" "${PDF_SSH_USER}@${PDF_SSH_HOST}:${PDF_SSH_REMOTE_DIR}/"
