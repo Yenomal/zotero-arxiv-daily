@@ -43,9 +43,20 @@ jobs:
           PDF_SSH_PRIVATE_KEY: ${{ secrets.PDF_SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" "$PDF_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "${PDF_SSH_PORT}" "${PDF_SSH_HOST}" >> ~/.ssh/known_hosts
+          printf "%s\n" "$PDF_SSH_PRIVATE_KEY" > ~/.ssh/pdf_sync_key
+          chmod 600 ~/.ssh/pdf_sync_key
+          echo "PDF_SSH_HOST set: $([ -n "${PDF_SSH_HOST}" ] && echo yes || echo no)"
+          echo "PDF_SSH_PORT=${PDF_SSH_PORT}"
+          echo "PDF_SSH_USER=${PDF_SSH_USER}"
+          echo "Runner public IP:"
+          curl -fsSL https://api.ipify.org || true
+          echo
+          echo "DNS lookup:"
+          getent hosts "${PDF_SSH_HOST}" || true
+          echo "TCP connectivity:"
+          nc -vz -w 20 "${PDF_SSH_HOST}" "${PDF_SSH_PORT}"
+          echo "Scanning SSH host key:"
+          ssh-keyscan -T 20 -p "${PDF_SSH_PORT}" "${PDF_SSH_HOST}" | tee -a ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
       - name: Sync PDFs to remote host
@@ -57,11 +68,11 @@ jobs:
           PDF_SSH_USER: ${{ secrets.PDF_SSH_USER }}
           PDF_SSH_REMOTE_DIR: ${{ vars.PDF_SSH_REMOTE_DIR }}
         run: |
-          ssh -p "${PDF_SSH_PORT}" -i ~/.ssh/id_ed25519 "${PDF_SSH_USER}@${PDF_SSH_HOST}" "mkdir -p '${PDF_SSH_REMOTE_DIR}'"
+          ssh -vvv -o BatchMode=yes -o ConnectTimeout=20 -p "${PDF_SSH_PORT}" -i ~/.ssh/pdf_sync_key "${PDF_SSH_USER}@${PDF_SSH_HOST}" "mkdir -p '${PDF_SSH_REMOTE_DIR}'"
           shopt -s nullglob
           files=("${PDF_LOCAL_DIR}"/*)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No PDF or metrics files to sync."
             exit 0
           fi
-          scp -P "${PDF_SSH_PORT}" -i ~/.ssh/id_ed25519 "${files[@]}" "${PDF_SSH_USER}@${PDF_SSH_HOST}:${PDF_SSH_REMOTE_DIR}/"
+          scp -v -P "${PDF_SSH_PORT}" -i ~/.ssh/pdf_sync_key "${files[@]}" "${PDF_SSH_USER}@${PDF_SSH_HOST}:${PDF_SSH_REMOTE_DIR}/"
