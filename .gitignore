@@ -22,3 +22,4 @@ config/private.yaml
 docs/
 tests/
 run_list1.sh
+Mybase.yaml

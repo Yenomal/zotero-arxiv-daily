@@ -1,7 +1,7 @@
 zotero:
-  user_id: 19866110 # User ID of your Zotero account.
-  api_key: H3Tua0OAqmeYnn1NCKQVBGwR # An Zotero API key with read/write access.
-  include_path: ["精读", "精读/**"] # A list of glob patterns marking the Zotero collections that should be included. Example: ["2026/survey/**","2026/reading-group/**"]
+  user_id: ??? # User ID of your Zotero account.
+  api_key: ??? # An Zotero API key with read/write access.
+  include_path: null # A list of glob patterns marking the Zotero collections that should be included. Example: ["2026/survey/**","2026/reading-group/**"]
   ignore_path: null # A list of glob patterns marking the Zotero collections that should be excluded. Example: ["2026/ignore/**","archive/**"]
 
 source:
@@ -30,14 +30,14 @@ email:
 output:
   mode: zotero # The output mode. Example: email, zotero, both
   zotero:
-    collection_path_parts: ["泛读"] # The Zotero collection path parts to receive recommended papers. Example: ["泛读"]
-    collection_path: 泛读 # The Zotero collection path to receive recommended papers. Example: 泛读
+    collection_path_parts: ??? # The Zotero collection path parts to receive recommended papers. Example: ["泛读"]
+    collection_path: ??? # The Zotero collection path to receive recommended papers. Example: 泛读
     write_note: true # Whether to write recommendation notes. Example: true
     note_template_path: config/note_template.html # The HTML template path for recommendation notes. Example: config/note_template.html
     note_template: "<p>推荐来源：zotero-arxiv-daily</p>" # Fallback HTML template when the template file is unavailable.
   pdf:
     enabled: true # Whether to save PDFs locally. Example: true
-    dir: /home/rui/zotero/pdf # The local directory for downloaded PDFs. Example: /home/rui/zotero/pdf
+    dir: ??? # The local directory for downloaded PDFs. Example: /home/rui/zotero/pdf
 
 scorer:
   enabled: true # Whether to enable the stage-3 scoring skill. Example: true
@@ -56,12 +56,12 @@ scorer:
       reference_headings: ["References", "REFERENCES", "Bibliography", "BIBLIOGRAPHY"] # The headings used to stop the text. Example: ["References", "Bibliography"]
   metrics:
     write_txt: true # Whether to write total token usage to a txt file. Example: true
-    output_dir: /home/rui/zotero/pdf # The metrics output directory. Example: /home/rui/zotero/pdf
+    output_dir: ??? # The metrics output directory. Example: /home/rui/zotero/pdf
 
 llm:
   api:
-    key: sk-23cc02e8ca6c6bac760bc6becf9b7e5ca58d6fc39c7e120682b617c34b1a5cce # API Key of your LLM API. Example: sk-xxx
-    base_url: https://api.psydo.top/v1 # API URL of your LLM API. Example: https://api.openai.com/v1
+    key: ??? # API Key of your LLM API. Example: sk-xxx
+    base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
   generation_kwargs:
   # Arguments for the LLM API. See [here](https://platform.openai.com/docs/api-reference/chat/create) for more details.
     max_tokens: 16384
@@ -76,8 +76,8 @@ reranker:
       task: retrieval
       prompt_name: document
   api:
-    key: sk-23cc02e8ca6c6bac760bc6becf9b7e5ca58d6fc39c7e120682b617c34b1a5cce # API Key of your embedding model API. Example: sk-xxx
-    base_url: https://api.psydo.top/v1 # API URL of your embedding model API. Example: https://api.openai.com/v1
+    key: ??? # API Key of your embedding model API. Example: sk-xxx
+    base_url: ??? # API URL of your embedding model API. Example: https://api.openai.com/v1
     model: text-embedding-3-large # The model name of the embedding model. Example: text-embedding-3-large
     batch_size: 64 # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
 
