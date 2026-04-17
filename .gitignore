@@ -20,5 +20,5 @@ config/private.yaml
 
 # process docs
 docs/
-test/
+tests/
 run_list1.sh
