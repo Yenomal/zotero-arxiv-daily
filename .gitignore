@@ -18,8 +18,17 @@ test-compose.yml
 outputs
 config/private.yaml
 
-# process docs
+# Local-only configs and scripts
+MyRun.sh
+Mybase.yaml
+
+# Local Zotero/PDF artifacts
+*.rdf
+*.pdf
+
+# process
 docs/
 tests/
-run_list1.sh
-Mybase.yaml
+
+# cache
+.pytest_cache/

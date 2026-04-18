@@ -167,8 +167,7 @@ class Executor:
             for p in tqdm(reranked_papers):
                 p.generate_tldr(self.openai_client, self.config.llm)
                 p.generate_affiliations(self.openai_client, self.config.llm)
-        has_email_sink = any(sink.__class__.__name__ == "EmailSink" for sink in self.sinks)
-        if len(reranked_papers) == 0 and not (has_email_sink and self.config.executor.send_empty):
+        if len(reranked_papers) == 0:
             logger.info("No new papers found. No output will be produced.")
             return
 
