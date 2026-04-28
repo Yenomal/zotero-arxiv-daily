@@ -2,7 +2,9 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 import re
+from time import sleep
 
+import httpx
 from hydra.utils import to_absolute_path
 from loguru import logger
 from omegaconf import DictConfig
@@ -40,12 +42,46 @@ def _extract_created_key(response: dict | None) -> str | None:
     return None
 
 
+RETRYABLE_ZOTERO_EXCEPTIONS = (
+    httpx.ConnectTimeout,
+    httpx.ConnectError,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+)
+
+
 class ZoteroSink(BaseSink):
     def __init__(self, config: DictConfig):
         super().__init__(config)
         self.existing_index = ExistingPaperIndex.from_config(config)
         self.zot = self.existing_index.zot
         self.collection_key = self.existing_index.collection_key
+
+    def _create_items_with_retry(self, payload: list[dict], operation: str, paper: Paper):
+        max_attempts = int(self.config.output.zotero.get("max_write_attempts", 5))
+        retry_delay_sec = float(self.config.output.zotero.get("retry_delay_sec", 5))
+        retry_backoff = float(self.config.output.zotero.get("retry_backoff", 2.0))
+        if max_attempts < 1:
+            max_attempts = 1
+
+        delay = retry_delay_sec
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.zot.create_items(payload)
+            except RETRYABLE_ZOTERO_EXCEPTIONS as exc:
+                if attempt >= max_attempts:
+                    raise
+                logger.warning(
+                    "Zotero {} failed for '{}' on attempt {}/{}: {}. Retrying in {:.1f}s",
+                    operation,
+                    paper.title,
+                    attempt,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                sleep(delay)
+                delay *= retry_backoff
 
     def _paper_exists(self, paper: Paper) -> bool:
         return self.existing_index.contains(paper)
@@ -128,7 +164,7 @@ class ZoteroSink(BaseSink):
             "parentItem": parent_key,
             "note": note_text,
         }
-        self.zot.create_items([note_payload])
+        self._create_items_with_retry([note_payload], "recommendation note creation", paper)
 
     def _create_reading_note(self, parent_key: str, paper: Paper) -> None:
         if not paper.reading_note_html:
@@ -138,7 +174,7 @@ class ZoteroSink(BaseSink):
             "parentItem": parent_key,
             "note": paper.reading_note_html,
         }
-        self.zot.create_items([note_payload])
+        self._create_items_with_retry([note_payload], "reading note creation", paper)
 
     def _build_attachment_path(self, local_pdf_path: str) -> str:
         pdf_root = Path(self.config.output.pdf.dir).expanduser().resolve()
@@ -161,7 +197,7 @@ class ZoteroSink(BaseSink):
             "path": self._build_attachment_path(paper.local_pdf_path),
             "contentType": "application/pdf",
         }
-        self.zot.create_items([attachment_payload])
+        self._create_items_with_retry([attachment_payload], "linked attachment creation", paper)
 
     def deliver(self, papers: list[Paper]) -> None:
         if not papers:
@@ -170,24 +206,39 @@ class ZoteroSink(BaseSink):
 
         created = 0
         skipped = 0
+        failed = 0
         for paper in papers:
             if self._paper_exists(paper):
                 skipped += 1
                 logger.info(f"Skipping existing Zotero paper: {paper.title}")
                 continue
 
-            response = self.zot.create_items([self._paper_to_item(paper)])
+            try:
+                response = self._create_items_with_retry(
+                    [self._paper_to_item(paper)],
+                    "item creation",
+                    paper,
+                )
+            except Exception as exc:
+                failed += 1
+                logger.error(f"Failed to create Zotero item for {paper.title} after retries: {exc}")
+                continue
+
             item_key = _extract_created_key(response)
             if item_key is None:
+                failed += 1
                 logger.warning(f"Failed to create Zotero item for {paper.title}: {response}")
                 continue
 
-            if self.config.output.zotero.write_note:
-                self._create_note(item_key, paper)
-                self._create_reading_note(item_key, paper)
-            self._create_linked_attachment(item_key, paper)
+            try:
+                if self.config.output.zotero.write_note:
+                    self._create_note(item_key, paper)
+                    self._create_reading_note(item_key, paper)
+                self._create_linked_attachment(item_key, paper)
+            except Exception as exc:
+                logger.error(f"Failed to create Zotero child item for {paper.title} after retries: {exc}")
 
             self.existing_index.remember(paper)
             created += 1
 
-        logger.info(f"Zotero write completed: created={created}, skipped={skipped}")
+        logger.info(f"Zotero write completed: created={created}, skipped={skipped}, failed={failed}")

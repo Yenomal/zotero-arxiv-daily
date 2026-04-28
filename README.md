@@ -8,7 +8,7 @@
 2. 使用 `include_path / ignore_path` 选择指定 Zotero collection
 3. 从 arXiv RSS 获取最新论文候选
 4. 使用 embedding 计算相关性并初排
-5. 对候选论文补全文、清洗正文并进行 LLM 评分
+5. 对候选论文补全文、清洗正文并进行 LLM 辅助评分
 6. 将推荐论文写入 Zotero 指定 collection
 7. 将 PDF 保存到本地目录
 8. 为 Zotero 条目创建本地 linked attachment
@@ -81,6 +81,19 @@ scorer:
   enabled: true
   final_top_k: 10
   model: gpt-5.4
+  score_weights:
+    relevance: 0.6
+    quality: 0.1
+    novelty: 0.15
+    empirical: 0.1
+    clarity: 0.05
+```
+
+### 初排
+
+```yaml
+reranker:
+  time_decay_weight: 0.0
 ```
 
 ## 数据流
@@ -89,11 +102,11 @@ scorer:
 Zotero 语料
   -> collection 路径过滤
   -> arXiv 候选论文
-  -> embedding 初排
+  -> embedding 相关性初排
   -> 全文补全
   -> 正文清洗
-  -> LLM 评分
-  -> 二次重排
+  -> LLM 辅助评分
+  -> 相关性主导的加权复排
   -> Zotero 写入
   -> 本地 PDF 保存
 ```

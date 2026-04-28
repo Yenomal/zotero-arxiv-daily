@@ -27,7 +27,7 @@ Mybase.yaml
 *.pdf
 
 # process
-docs/
+process_docs/
 tests/
 
 # cache

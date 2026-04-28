@@ -28,6 +28,10 @@ output:
     write_note: true # Whether to write recommendation notes. Example: true
     note_template_path: config/note_template.html # The HTML template path for recommendation notes. Example: config/note_template.html
     note_template: "<p>推荐来源：zotero-arxiv-daily</p>" # Fallback HTML template when the template file is unavailable.
+    request_timeout_sec: 30 # Zotero API request timeout in seconds. Example: 30
+    max_write_attempts: 5 # Max attempts for transient Zotero write failures. Example: 5
+    retry_delay_sec: 5 # Initial delay before retrying a transient Zotero write failure. Example: 5
+    retry_backoff: 2.0 # Retry delay multiplier for transient Zotero write failures. Example: 2.0
   pdf:
     enabled: true # Whether to save PDFs locally. Example: true
     dir: ??? # The local directory for downloaded PDFs. Example: /home/rui/zotero/pdf
@@ -37,6 +41,12 @@ scorer:
   final_top_k: ??? # The number of papers kept after second ranking. Example: 10
   model: ??? # The LLM model used for scoring. Example: gpt-5.4
   temperature: 0.2 # The temperature used for scoring. Example: 0.2
+  score_weights:
+    relevance: 0.6 # Weight of first-stage semantic relevance in final ranking. Example: 0.6
+    quality: 0.1 # Weight of LLM quality score in final ranking. Example: 0.1
+    novelty: 0.15 # Weight of LLM novelty score in final ranking. Example: 0.15
+    empirical: 0.1 # Weight of LLM empirical score in final ranking. Example: 0.1
+    clarity: 0.05 # Weight of LLM clarity score in final ranking. Example: 0.05
   prompt:
     system_prompt_path: config/scorer_system_prompt.txt # The system prompt path. Example: config/scorer_system_prompt.txt
     user_prompt_path: config/scorer_user_prompt.txt # The user prompt path. Example: config/scorer_user_prompt.txt
@@ -62,6 +72,7 @@ llm:
   language: ??? # Preferred language for the TL;DR. Example: English
 
 reranker:
+  time_decay_weight: 0.0 # Blend weight for recency decay during first-stage reranking. 0.0 means pure semantic relevance; 1.0 means fully recency-weighted relevance. Example: 0.0
   local:
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:

@@ -1,5 +1,6 @@
 import re
 
+import httpx
 from omegaconf import DictConfig, ListConfig
 from pyzotero import zotero
 
@@ -45,7 +46,13 @@ class ExistingPaperIndex:
 
     @classmethod
     def from_config(cls, config: DictConfig):
-        zot_client = zotero.Zotero(config.zotero.user_id, "user", config.zotero.api_key)
+        timeout_sec = float(config.output.zotero.get("request_timeout_sec", 30))
+        zot_client = zotero.Zotero(
+            config.zotero.user_id,
+            "user",
+            config.zotero.api_key,
+        )
+        zot_client.client.timeout = httpx.Timeout(timeout_sec)
         collection_path = normalize_collection_path(config)
         collections = zot_client.everything(zot_client.collections())
         _, path_to_key = build_collection_path_maps(collections)
